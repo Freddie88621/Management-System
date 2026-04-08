@@ -323,6 +323,22 @@ select.ci{cursor:pointer}
       <div class="dm-row"><button class="btn d" onclick="clearAll()">⚠ 清空所有数据</button></div>
     </div>
     <div class="dm-card">
+      <h3>☁ 云端同步（跨电脑使用）</h3>
+      <p>使用免费的 <b>JSONBin.io</b> 实现多电脑数据同步。步骤：① 注册 <a href="https://jsonbin.io" target="_blank">jsonbin.io</a> 免费账号 ② 创建一个 Bin（内容填 <code>{}</code>）获得 Bin ID ③ 在 Account → API Keys 获取 Master Key ④ 填入下方并保存设置。之后每次"保存数据"都会自动推送到云端，换电脑后点"从云端拉取"即可同步最新数据。</p>
+      <div style="display:grid;grid-template-columns:80px 1fr;gap:6px 8px;align-items:center;font-size:12px;margin-bottom:10px">
+        <label style="color:#666">Master Key:</label>
+        <input id="cl-key" type="password" placeholder="$2b$10$..." style="height:26px;border:1px solid #d9d9d9;border-radius:3px;padding:0 8px;font-size:12px;font-family:monospace">
+        <label style="color:#666">Bin ID:</label>
+        <input id="cl-bin" type="text" placeholder="64位bin ID..." style="height:26px;border:1px solid #d9d9d9;border-radius:3px;padding:0 8px;font-size:12px;font-family:monospace">
+      </div>
+      <div class="dm-row">
+        <button class="btn p" onclick="saveCloudCfg()">💾 保存云同步设置</button>
+        <button class="btn s" onclick="pushCloud()">⬆ 立即推送到云端</button>
+        <button class="btn" onclick="pullCloud()">⬇ 从云端拉取数据</button>
+      </div>
+      <div id="cl-status" style="margin-top:8px;font-size:11px;color:#888"></div>
+    </div>
+    <div class="dm-card">
       <h3>ℹ 系统信息</h3>
       <div style="font-size:12px;color:#555;line-height:2.2">
         任务总数：<b id="inf-t">0</b> 条 &nbsp;|&nbsp; 阶段数：<b id="inf-p">0</b> 个 &nbsp;|&nbsp; 最后保存：<b id="inf-s">未保存</b>
@@ -409,9 +425,57 @@ function save(){
   updInf();
 }
 
+// ===================== CLOUD SYNC =====================
+let cloudCfg={key:'',binId:''};
+function loadCloudCfg(){
+  try{const c=localStorage.getItem('__rdtms_cloud__');if(c)cloudCfg=JSON.parse(c);}catch(e){}
+  const ki=document.getElementById('cl-key'),bi=document.getElementById('cl-bin');
+  if(ki)ki.value=cloudCfg.key||'';
+  if(bi)bi.value=cloudCfg.binId||'';
+}
+function saveCloudCfg(){
+  cloudCfg.key=document.getElementById('cl-key')?.value.trim()||'';
+  cloudCfg.binId=document.getElementById('cl-bin')?.value.trim()||'';
+  localStorage.setItem('__rdtms_cloud__',JSON.stringify(cloudCfg));
+  toast('☁ 云同步设置已保存');
+}
+function setClSt(msg,col){const el=document.getElementById('cl-status');if(el){el.textContent=msg;el.style.color=col||'#888';}}
+async function pushCloud(){
+  if(!cloudCfg.key||!cloudCfg.binId){toast('请先在数据管理页配置云同步Key和Bin ID');return;}
+  setClSt('正在推送…','#1890ff');
+  try{
+    const r=await fetch(`https://api.jsonbin.io/v3/b/${cloudCfg.binId}`,{
+      method:'PUT',
+      headers:{'Content-Type':'application/json','X-Master-Key':cloudCfg.key,'X-Bin-Versioning':'false'},
+      body:JSON.stringify(D)
+    });
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    setClSt('✅ 已同步到云端 '+new Date().toLocaleTimeString('zh-CN'),'#52c41a');
+  }catch(e){setClSt('❌ 推送失败：'+e.message,'#ff4d4f');toast('❌ 云同步推送失败：'+e.message);}
+}
+async function pullCloud(){
+  if(!cloudCfg.key||!cloudCfg.binId){toast('请先配置云同步Key和Bin ID');return;}
+  setClSt('正在拉取…','#1890ff');
+  try{
+    const r=await fetch(`https://api.jsonbin.io/v3/b/${cloudCfg.binId}/latest`,{
+      headers:{'X-Master-Key':cloudCfg.key}
+    });
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const d=j.record;
+    if(!d||!d.tasks||!d.phases)throw new Error('云端数据格式不正确');
+    confirm2('从云端拉取数据将覆盖当前本地数据，是否继续？',()=>{
+      D=d;save();init();
+      setClSt('✅ 已从云端拉取 '+new Date().toLocaleTimeString('zh-CN'),'#52c41a');
+      toast('✅ 已从云端拉取最新数据，共'+D.tasks.length+'条任务');
+    });
+  }catch(e){setClSt('❌ 拉取失败：'+e.message,'#ff4d4f');toast('❌ 云端拉取失败：'+e.message);}
+}
+
 function saveLoc(){
   save();
-  toast('✅ 数据已保存到本地浏览器');
+  if(cloudCfg.key&&cloudCfg.binId){pushCloud();toast('✅ 已保存并推送到云端');}
+  else{toast('✅ 数据已保存（提示：在数据管理页配置云同步可跨电脑使用）');}
 }
 
 let toastT;
@@ -984,7 +1048,10 @@ function genWc(){
     let ds='';
     if(t.deadline){
       const days=odDays(t.deadline);
-      ds=days>0?`完成时限${fmtD(t.deadline)}（已超期${days}天）`:`完成时限${fmtD(t.deadline)}`;
+      if(days>0)ds=`超期${days}天`;
+      else if(days===0)ds=`完成时限今天`;
+      else if(days===-1)ds=`完成时限明天`;
+      else ds=`完成时限${fmtD(t.deadline)}`;
     } else {ds='未设置完成时限';}
     const note=t.notes?`：${t.notes}`:'';
     lines.push(`${i+1}. ${t.name}${note}（${ds}）`);
@@ -1110,11 +1177,19 @@ function init(){
   updPhSels();updWcFil();renderT();sel.clear();lastSelIdx=-1;updInf();
 }
 
-window.addEventListener('DOMContentLoaded',()=>{
+window.addEventListener('DOMContentLoaded',async ()=>{
   try{
     if(typeof __RDTMS__!=='undefined'&&__RDTMS__!==null){D=__RDTMS__;}
     else{const s=localStorage.getItem('__rdtms__');if(s)D=JSON.parse(s);}
   }catch(e){}
+  loadCloudCfg();
+  // 若已配置云同步，启动时静默拉取最新数据
+  if(cloudCfg.key&&cloudCfg.binId){
+    try{
+      const r=await fetch(`https://api.jsonbin.io/v3/b/${cloudCfg.binId}/latest`,{headers:{'X-Master-Key':cloudCfg.key}});
+      if(r.ok){const j=await r.json();const d=j.record;if(d?.tasks&&d?.phases){D=d;save();}}
+    }catch(e){}
+  }
   init();
 });
 </script>

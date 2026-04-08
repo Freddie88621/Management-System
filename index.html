@@ -405,7 +405,10 @@ function isOD(t){
   return new Date(t.deadline)<new Date(new Date().toDateString());
 }
 function odDays(dl){
-  return Math.floor((new Date(new Date().toDateString())-new Date(dl))/86400000);
+  if(!dl) return 0;
+  const d1 = new Date(new Date().toDateString()); // 今天0点
+  const d2 = new Date(new Date(dl).toDateString()); // 截止日0点（关键修复）
+  return Math.floor((d1 - d2) / 86400000);
 }
 function fmtD(d){
   if(!d)return'';
